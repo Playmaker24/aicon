@@ -1,0 +1,686 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AICON Graph</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #ffffff; --fg: #232634; --muted: #8c8fa1; --edge: #dce0e8; --card: #ffffff;
+    --goal: #e78284; --estimator: #8caaee; --connection: #a6d189; --action: #e5c890; --path: #e78284;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, -apple-system, sans-serif; }
+  header { display: flex; align-items: center; gap: 10px; padding: 16px 24px; }
+  h1 { font-size: 15px; font-weight: 600; margin: 0; }
+  #status { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  #status.live { background: var(--connection); }
+  .toggle { border: 0; background: none; color: var(--muted); font: inherit; font-size: 16px; cursor: pointer;
+    padding: 0 4px; }
+  .toggle:hover, .toggle.on { color: var(--fg); }
+  #watch-toggle { margin-left: auto; font-size: 13px; }
+  main { display: flex; }
+  #pane { width: 230px; flex: none; height: calc(100vh - 54px); overflow-y: auto; padding: 0 16px 16px 24px;
+    border-right: 1px solid var(--edge); font-size: 13px; }
+  #pane.collapsed { display: none; }
+  aside h2 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+    margin: 4px 0 8px; }
+  .group { margin-bottom: 12px; }
+  #pane label { display: flex; align-items: center; gap: 8px; padding: 2px 0; cursor: pointer; user-select: none; }
+  #pane label.group-title { font-weight: 600; }
+  #pane label.item { padding-left: 4px; }
+  #pane label.gone { color: var(--muted); }
+  #pane input { margin: 0; accent-color: var(--estimator); }
+  .dot { width: 9px; height: 9px; flex: none; border-radius: 50%; }
+  .dot.sensor, .dot.action { background: var(--action); }
+  .dot.estimator { background: var(--estimator); }
+  .dot.connection { background: var(--connection); border-radius: 2px; }
+  .dot.goal { background: var(--goal); border-radius: 1px; transform: rotate(45deg) scale(0.85); }
+  #pane section { margin-bottom: 20px; }
+  #pane button { font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--edge);
+    border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  #pane button:hover { border-color: var(--muted); }
+  #view { flex: 1; min-width: 0; }
+  .hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+  /* the watch panel */
+  #watch-pane { width: 340px; flex: none; height: calc(100vh - 54px); overflow-y: auto; padding: 0 24px 16px 16px;
+    border-left: 1px solid var(--edge); font-size: 13px; }
+  #watch-pane.collapsed { display: none; }
+  #watch-input { width: 100%; font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--edge);
+    border-radius: 6px; padding: 5px 8px; outline: none; }
+  #watch-input:focus { border-color: var(--muted); }
+  #watch-input.invalid { border-color: var(--goal); }
+  .watch { padding: 6px 0; border-bottom: 1px solid var(--edge); }
+  .watch:first-child { margin-top: 8px; }
+  .watch.hl { background: color-mix(in srgb, var(--edge) 35%, transparent); }
+  .wrow { display: flex; align-items: center; gap: 6px; min-height: 22px; }
+  .wrow.head { font-weight: 600; }
+  .sub { padding-left: 18px; }
+  .caret { width: 12px; flex: none; color: var(--muted); font-size: 12px; cursor: pointer; user-select: none;
+    text-align: center; }
+  .caret:hover { color: var(--fg); }
+  .qname { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sub .qname { color: var(--muted); }
+  .muted { color: var(--muted); font-weight: 400; }
+  .val, .nums, .vec { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+    font-variant-numeric: tabular-nums; font-weight: 400; }
+  .val { display: flex; align-items: center; gap: 8px; flex: none; }
+  .vec { display: flex; gap: 8px; }
+  .nums { display: grid; gap: 1px 12px; justify-content: start; text-align: right; padding: 2px 0 4px; }
+  .v { border-radius: 3px; padding: 0 2px; }
+  .v.changed { animation: changed 0.8s ease-out; }
+  @keyframes changed { from { background: color-mix(in srgb, var(--action) 55%, transparent); } }
+  .spark { flex: none; }
+  .spark polyline { fill: none; stroke: var(--estimator); stroke-width: 1.5; stroke-linejoin: round; }
+  .chip { font-size: 11px; color: var(--muted); font-family: system-ui, sans-serif; }
+  .remove { border: 0; background: none; color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer;
+    padding: 0 2px; opacity: 0; }
+  .wrow.head:hover .remove { opacity: 1; }
+  .remove:hover { color: var(--fg); }
+  .grad { margin: 4px 0; padding-left: 8px; border-left: 2px solid var(--edge); }
+  .grad.followed { border-left-color: var(--path); }
+  .via { color: var(--muted); font-size: 11px; }
+  /* graph: the marker of watched nodes, and the node of the watch under the pointer */
+  .watch-mark { display: none; fill: var(--fg); stroke: var(--bg); stroke-width: 2; }
+  .node.watched .watch-mark { display: inline; }
+  .node.hl .shape { stroke: var(--fg); stroke-width: 2.5; opacity: 1 !important; }
+  .node.hl .label { opacity: 1 !important; fill: var(--fg); }
+  #graph { display: block; width: 100%; height: calc(100vh - 150px); user-select: none; }
+  .node.movable { cursor: grab; }
+  svg.dragging, svg.dragging .node { cursor: grabbing; }
+  .edge { stroke: var(--edge); stroke-width: 2; fill: none; }
+  .path { stroke: var(--path); stroke-width: 3; fill: none; stroke-dasharray: 8 6; animation: flow 0.6s linear infinite; }
+  .path-idle { stroke: var(--muted); stroke-width: 2; fill: none; opacity: 0.6; }
+  @keyframes flow { to { stroke-dashoffset: -14; } }
+  /* the outline in the background colour keeps edges passing behind a label from running through it */
+  .label { fill: var(--muted); font-size: 12px; text-anchor: middle;
+    paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
+  .goal-label { text-anchor: start; }
+  .node .shape, .node .label { transition: opacity 0.2s; }
+  .dim .node:not(.on) .shape, .dim .node:not(.on) .label { opacity: 0.45; }
+  #paths { padding: 0 24px 16px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+  .row { display: flex; gap: 10px; align-items: baseline; }
+  .row b { font-weight: 600; min-width: 140px; }
+  .row b::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--action); margin-right: 8px; }
+  .row span { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <button id="pane-toggle" class="toggle" title="Tools">☰</button><div id="status"></div><h1>AICON graph</h1>
+  <button id="watch-toggle" class="toggle" title="Watches">Watches</button>
+</header>
+<main>
+  <aside id="pane">
+    <section>
+      <h2>Layout</h2>
+      <button id="auto-layout">Auto layout</button>
+      <p class="hint">Drag nodes to move them; auto layout arranges them with few crossing edges. Double-click a
+        node to watch it.</p>
+    </section>
+    <section><h2>Components</h2><div id="components"></div></section>
+  </aside>
+  <div id="view"><svg id="graph"></svg><div id="paths"></div></div>
+  <aside id="watch-pane">
+    <h2>Watches</h2>
+    <form id="watch-form" autocomplete="off">
+      <input id="watch-input" list="watch-options" placeholder="Add a node or quantity, e.g. position_cube">
+      <datalist id="watch-options"></datalist>
+    </form>
+    <div id="watches"></div>
+    <p class="hint" id="watch-empty">Double-click a node or type a name to watch it.</p>
+  </aside>
+</main>
+<script>
+const NS = "http://www.w3.org/2000/svg";
+const svg = document.getElementById("graph");
+const R = 26;  // node radius
+const GROUPS = [["sensor", "Sensors"], ["action", "Actions"], ["estimator", "Estimators"],
+                ["connection", "Interconnections"], ["goal", "Goals"]];
+// the nodes hidden in the view (only here, the graph itself is unchanged), kept across reloads
+const hidden = new Set(JSON.parse(localStorage.getItem("aicon-hidden") || "[]"));
+let pos = {};
+
+function el(name, attrs, parent) {
+  const e = document.createElementNS(NS, name);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+function isGoal(graph, id) {
+  return graph.nodes.some(n => n.id === id && n.type === "goal");
+}
+
+function goalsOf(graph) {  // goal -> estimator
+  const goalOf = {};
+  graph.edges.forEach(e => { if (isGoal(graph, e.source)) goalOf[e.source] = e.target; });
+  return goalOf;
+}
+
+// the graph without the hidden nodes, their edges and the goals of hidden estimators
+function visibleGraph(graph) {
+  const goalOf = goalsOf(graph);
+  const shown = new Set(graph.nodes.map(n => n.id).filter(id => !hidden.has(id) && !hidden.has(goalOf[id])));
+  return { nodes: graph.nodes.filter(n => shown.has(n.id)),
+           edges: graph.edges.filter(e => shown.has(e.source) && shown.has(e.target)) };
+}
+
+// the number of crossing edges; all edges run between neighbouring layers (estimators and interconnections alternate)
+function crossings(layers, nbrs, layer) {
+  const index = {};
+  layers.forEach(ids => ids.forEach((id, i) => index[id] = i));
+  let n = 0;
+  for (let l = 1; l < layers.length; l++) {
+    const es = layers[l].flatMap(id => nbrs[id].filter(m => layer[m] === l - 1).map(m => [index[id], index[m]]));
+    es.forEach(([a, b], i) => es.slice(i + 1).forEach(([c, d]) => { if ((a - c) * (b - d) < 0) n++; }));
+  }
+  return n;
+}
+
+// orders the nodes within their layers for few crossings: alternating sweeps that sort each layer by the mean
+// position of the neighbours in the previous one, then swaps of neighbouring nodes that remove crossings
+function orderLayers(layers, nbrs, layer) {
+  const count = () => crossings(layers, nbrs, layer);
+  const sweep = (l, ref) => {
+    const index = {}, score = {};
+    layers[ref].forEach((id, i) => index[id] = i);
+    layers[l].forEach((id, i) => {
+      const ns = nbrs[id].filter(m => layer[m] === ref).map(m => index[m]);
+      score[id] = ns.length ? ns.reduce((a, b) => a + b) / ns.length : i;
+    });
+    layers[l].sort((a, b) => score[a] - score[b]);
+  };
+  let best = layers.map(ids => [...ids]), fewest = count();
+  for (let it = 0; it < 20 && fewest > 0; it++) {
+    if (it % 2 === 0) for (let l = 1; l < layers.length; l++) sweep(l, l - 1);
+    else for (let l = layers.length - 2; l >= 0; l--) sweep(l, l + 1);
+    for (let improved = true; improved;) {
+      improved = false;
+      layers.forEach(ids => {
+        for (let i = 0; i + 1 < ids.length; i++) {
+          const before = count();
+          [ids[i], ids[i + 1]] = [ids[i + 1], ids[i]];
+          if (count() < before) improved = true;
+          else [ids[i], ids[i + 1]] = [ids[i + 1], ids[i]];
+        }
+      });
+    }
+    const n = count();
+    if (n < fewest) { fewest = n; best = layers.map(ids => [...ids]); }
+  }
+  best.forEach((ids, l) => layers[l] = ids);
+}
+
+// each goal sits at the top right of its estimator, like an exponent; the goals of one estimator in a row, with one
+// label after the last
+function placeGoals(graph) {
+  const byEstimator = {};
+  Object.entries(goalsOf(graph)).forEach(([g, e]) => (byEstimator[e] ||= []).push(g));
+  goalLabel = {};
+  Object.entries(byEstimator).forEach(([e, goals]) => {
+    goals.forEach((g, i) => pos[g] = [pos[e][0] + R * (1.35 + 1.4 * i), pos[e][1] - R * 1.35]);
+    goalLabel[goals[goals.length - 1]] = goals.join(", ");
+  });
+}
+
+const textContext = document.createElement("canvas").getContext("2d");
+textContext.font = "12px system-ui, -apple-system, sans-serif";
+const textWidth = text => textContext.measureText(text).width;
+const halfWidth = id => Math.max(R, textWidth(id) / 2);  // of a node with its label below
+const DX = 150, DY = 100, GAP = 24;  // the least distance between columns and rows, the least space between labels
+
+// the view box around all nodes and labels: scaled down if they do not fit, never scaled up
+function fitView(graph) {
+  let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+  graph.nodes.forEach(n => {
+    const [x, y] = pos[n.id];
+    const [l, r, t, b] = n.type === "goal"
+      ? [x - R, x + R * 1.15 + textWidth(goalLabel[n.id] || ""), y - R, y + R]
+      : [x - halfWidth(n.id), x + halfWidth(n.id), y - R, y + R + 24];
+    [x0, y0, x1, y1] = [Math.min(x0, l), Math.min(y0, t), Math.max(x1, r), Math.max(y1, b)];
+  });
+  if (!graph.nodes.length) [x0, y0, x1, y1] = [0, 0, 0, 0];
+  const w = Math.max(x1 - x0 + 2 * GAP, svg.clientWidth), h = Math.max(y1 - y0 + 2 * GAP, svg.clientHeight);
+  viewBox = [(x0 + x1 - w) / 2, (y0 + y1 - h) / 2, w, h];
+  svg.setAttribute("viewBox", viewBox.join(" "));
+}
+
+// layers by graph distance from the estimators with goals (on the right), ordered for few crossing edges and spaced
+// so that no labels overlap; nodes dragged by hand keep their place
+function layout(graph) {
+  pos = {};
+  const goalOf = goalsOf(graph);
+  const nodes = graph.nodes.filter(n => n.type !== "goal");
+  if (!nodes.length) return;
+  const nbrs = {};
+  nodes.forEach(n => nbrs[n.id] = []);
+  graph.edges.forEach(e => {
+    if (e.source in goalOf) return;
+    nbrs[e.source].push(e.target); nbrs[e.target].push(e.source);
+  });
+  const layer = {};
+  let frontier = [...new Set(Object.values(goalOf))];
+  if (!frontier.length) frontier = nodes.filter(n => n.type === "estimator").map(n => n.id);
+  if (!frontier.length) frontier = [nodes[0].id];
+  frontier.forEach(id => layer[id] = 0);
+  for (let d = 1; frontier.length; d++) {
+    const next = [];
+    frontier.forEach(id => nbrs[id].forEach(m => { if (!(m in layer)) { layer[m] = d; next.push(m); } }));
+    frontier = next;
+  }
+  const maxLayer = Math.max(0, ...Object.values(layer));
+  nodes.forEach(n => { if (!(n.id in layer)) layer[n.id] = maxLayer + 1; });
+  const layers = [];
+  nodes.forEach(n => (layers[layer[n.id]] ||= []).push(n.id));
+  orderLayers(layers, nbrs, layer);
+  // neighbouring columns are apart by at least their widest labels, rows leave room for the label below each node
+  let x = 0;
+  layers.forEach((ids, l) => {
+    if (l > 0) x -= Math.max(DX, Math.max(...layers[l - 1].map(halfWidth)) + Math.max(...ids.map(halfWidth)) + GAP);
+    ids.forEach((id, i) => pos[id] = [x, (i - (ids.length - 1) / 2) * DY]);
+  });
+  Object.entries(moved).forEach(([id, p]) => { if (id in pos) pos[id] = p; });
+  placeGoals(graph);
+}
+
+function draw(graph) {
+  svg.innerHTML = "";
+  const defs = el("defs", {}, svg);
+  const marker = el("marker", { id: "arrow", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 5,
+                                markerHeight: 5, orient: "auto" }, defs);
+  el("path", { d: "M0,0 L10,5 L0,10 z", fill: "var(--path)" }, marker);
+  const idleMarker = el("marker", { id: "arrow-idle", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 6,
+                                    markerHeight: 6, orient: "auto" }, defs);
+  el("path", { d: "M0,0 L10,5 L0,10 z", fill: "var(--muted)" }, idleMarker);
+  const edges = el("g", {}, svg);
+  graph.edges.forEach(e => {
+    if (isGoal(graph, e.source)) return;
+    const [a, b] = [pos[e.source], pos[e.target]];
+    el("line", { class: "edge", x1: a[0], y1: a[1], x2: b[0], y2: b[1] }, edges);
+  });
+  el("g", { id: "active" }, svg);
+  const nodes = el("g", { id: "nodes" }, svg);
+  graph.nodes.forEach(n => {
+    const [x, y] = pos[n.id];
+    const cls = "node" + (n.type === "goal" ? "" : " movable") + (watchedNodes().has(n.id) ? " watched" : "");
+    const g = el("g", { class: cls, "data-id": n.id }, nodes);
+    if (n.type !== "goal") g.addEventListener("pointerdown", e => { e.preventDefault(); startDrag(n.id); });
+    let tag, attrs, fill;
+    if (n.type === "goal")
+      [tag, attrs, fill] = ["rect", { x: x - R * 0.7, y: y - R * 0.7, width: R * 1.4, height: R * 1.4, rx: 3,
+                                      transform: `rotate(45 ${x} ${y})` }, "var(--goal)"];
+    else if (n.type === "connection")
+      [tag, attrs, fill] = ["rect", { x: x - R * 0.85, y: y - R * 0.85, width: R * 1.7, height: R * 1.7, rx: 8 },
+                            "var(--connection)"];
+    else
+      [tag, attrs, fill] = ["circle", { cx: x, cy: y, r: n.type === "estimator" ? R : R * 0.8 },
+                            n.type === "estimator" ? "var(--estimator)" : "var(--action)"];
+    // an opaque backing, so that edges do not shine through a dimmed node
+    el(tag, { ...attrs, fill: "var(--bg)" }, g);
+    el(tag, { ...attrs, fill, class: "shape" }, g);
+    const mark = n.type === "goal" ? R * 0.5 : n.type === "connection" ? R * 0.85 : R * 0.72;
+    if (n.type !== "connection") el("circle", { class: "watch-mark", cx: x - mark, cy: y - mark, r: 4.5 }, g);
+    if (n.type === "goal") {
+      if (n.id in goalLabel)
+        el("text", { class: "label goal-label", x: x + R * 1.15, y: y + 4 }, g).textContent = goalLabel[n.id];
+    }
+    else
+      el("text", { class: "label", x: x, y: y + R + 18 }, g).textContent = n.id;
+  });
+}
+
+// a slightly bent arc from node a to node b, ending at the node borders; the bend is to the left of the direction,
+// so the two directions between the same nodes do not overlap
+function arc(a, b) {
+  const [dx, dy] = [b[0] - a[0], b[1] - a[1]];
+  const len = Math.hypot(dx, dy) || 1, s = (R + 6) / len;
+  const [x1, y1, x2, y2] = [a[0] + dx * s, a[1] + dy * s, b[0] - dx * s, b[1] - dy * s];
+  const [cx, cy] = [(x1 + x2) / 2 + dy * 0.12, (y1 + y2) / 2 - dx * 0.12];
+  return `M${x1},${y1} Q${cx},${cy} ${x2},${y2}`;
+}
+
+// a path in the view: none if it passes a hidden node (a step through several interconnections only needs one shown)
+function visiblePath({ steps, edges }) {
+  const shown = steps.map(s => s.filter(id => id in pos));
+  if (shown.some(s => !s.length)) return null;
+  return { steps: shown, edges: edges.filter(([s, t]) => s in pos && t in pos) };
+}
+
+function showPaths(paths) {
+  const active = document.getElementById("active");
+  active.innerHTML = "";
+  const on = new Set(), seen = new Set();
+  const rows = [];
+  const shown = Object.entries(paths).filter(([action]) => action in pos)
+    .map(([action, p]) => [action, visiblePath(p), p.others.map(visiblePath).filter(o => o)]);
+  // the active paths are drawn over the other computed paths, which are drawn where no active path runs
+  const idle = new Map();
+  shown.forEach(([, , others]) => others.forEach(o => o.edges.forEach(([s, t]) => idle.set(s + ">" + t, [s, t]))));
+  shown.forEach(([, path]) => path && path.edges.forEach(([s, t]) => idle.delete(s + ">" + t)));
+  idle.forEach(([s, t]) => {
+    if (!isGoal(graph, s))
+      el("path", { class: "path-idle", d: arc(pos[s], pos[t]), "marker-end": "url(#arrow-idle)" }, active);
+  });
+  for (const [action, path] of shown) {
+    (path ? path.edges : []).forEach(([s, t]) => {
+      on.add(s); on.add(t);
+      if (seen.has(s + ">" + t) || isGoal(graph, s)) return;
+      seen.add(s + ">" + t);
+      el("path", { class: "path", d: arc(pos[s], pos[t]), "marker-end": "url(#arrow)" }, active);
+    });
+    const text = !path ? "passes hidden components" : path.steps.map(s => s.join(" / ")).join(" → ") || "no gradient";
+    rows.push(`<div class="row"><b>${action}</b><span>${text}</span></div>`);
+  }
+  svg.classList.toggle("dim", on.size > 0);
+  document.querySelectorAll(".node").forEach(g => {
+    g.classList.toggle("on", on.has(g.dataset.id));
+  });
+  document.getElementById("paths").innerHTML = rows.join("");
+}
+
+// the components tool: a checkbox per node, grouped by type, and one per group
+function buildComponents(graph) {
+  const box = document.getElementById("components");
+  box.innerHTML = GROUPS.map(([type, title]) => {
+    const ids = graph.nodes.filter(n => n.type === type).map(n => n.id);
+    if (!ids.length) return "";
+    return `<div class="group"><label class="group-title"><input type="checkbox" data-group="${type}">${title}</label>`
+      + ids.map(id => `<label class="item"><input type="checkbox" data-id="${id}"><i class="dot ${type}"></i>${id}</label>`)
+        .join("") + "</div>";
+  }).join("");
+  box.addEventListener("change", e => {
+    const ids = e.target.dataset.group
+      ? graph.nodes.filter(n => n.type === e.target.dataset.group).map(n => n.id) : [e.target.dataset.id];
+    ids.forEach(id => e.target.checked ? hidden.delete(id) : hidden.add(id));
+    localStorage.setItem("aicon-hidden", JSON.stringify([...hidden]));
+    render();
+  });
+}
+
+function syncComponents() {
+  document.querySelectorAll("#components input[data-id]").forEach(box => {
+    box.checked = !hidden.has(box.dataset.id);
+    box.parentElement.classList.toggle("gone", !(box.dataset.id in pos));  // e.g. the goal of a hidden estimator
+  });
+  document.querySelectorAll("#components input[data-group]").forEach(box => {
+    const ids = graph.nodes.filter(n => n.type === box.dataset.group).map(n => n.id);
+    const nShown = ids.filter(id => !hidden.has(id)).length;
+    box.checked = nShown === ids.length;
+    box.indeterminate = nShown > 0 && nShown < ids.length;
+  });
+}
+
+function render() {
+  view = visibleGraph(graph);
+  layout(view);
+  fitView(view);
+  draw(view);
+  showPaths(lastPaths);
+  syncComponents();
+}
+
+// dragging a node (its goals move along) within the view box, which stays as it is meanwhile; the positions are
+// kept per graph
+const movedKey = () => "aicon-positions:" + graph.nodes.map(n => n.id).join(",");
+let dragging = null;
+
+function startDrag(id) {
+  dragging = id;
+  svg.classList.add("dragging");
+}
+
+window.addEventListener("pointermove", e => {
+  if (!dragging) return;
+  const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(svg.getScreenCTM().inverse());
+  const [x0, y0, w, h] = viewBox;
+  moved[dragging] = pos[dragging] = [Math.min(Math.max(p.x, x0 + R), x0 + w - R),
+                                     Math.min(Math.max(p.y, y0 + R), y0 + h - R)];
+  placeGoals(view);
+  draw(view);
+  showPaths(lastPaths);
+});
+
+window.addEventListener("pointerup", () => {
+  if (!dragging) return;
+  dragging = null;
+  svg.classList.remove("dragging");
+  localStorage.setItem(movedKey(), JSON.stringify(moved));
+});
+
+document.getElementById("auto-layout").addEventListener("click", () => {
+  moved = {};
+  localStorage.removeItem(movedKey());
+  render();
+});
+
+// watches: a panel with the values of watched nodes and quantities, like the watches of a debugger. A watch is a node
+// ("CubePosEstimator", a goal: its cost), one of its quantities ("CubePosEstimator.position_cube") or the gradients
+// that reach an action ("RobotProprioAct.gradients"). The watches and which entries are expanded are kept per graph.
+let watches = [], expanded = {}, signature = "";
+const trend = {};  // the last values of each scalar, for the sparklines
+const HISTORY = 100;
+const watchKey = () => "aicon-watches:" + graph.nodes.map(n => n.id).join(",");
+const typeOf = id => (graph.nodes.find(n => n.id === id) || {}).type;
+const splitWatch = w => w.includes(".") ? [w.slice(0, w.indexOf(".")), w.slice(w.indexOf(".") + 1)] : [w, null];
+const watchedNodes = () => new Set(watches.map(w => splitWatch(w)[0]));
+const isOpen = (key, byDefault) => key in expanded ? expanded[key] : byDefault;
+const fmt = x => typeof x !== "number" ? (x ?? "–") : x === 0 ? "0"
+  : Math.abs(x) >= 1e4 || Math.abs(x) < 1e-3 ? x.toExponential(2) : x.toFixed(3);
+
+// a typed watch: a node, a goal, "node.quantity", "action.gradients" or a quantity alone; null if there is none such
+function resolveWatch(text) {
+  text = text.trim();
+  const type = typeOf(text);
+  if (type) return type === "connection" ? null : text;
+  if (text in graph.owner) return graph.owner[text] + "." + text;
+  const [node, q] = splitWatch(text);
+  return q && (graph.owner[q] === node || (q === "gradients" && typeOf(node) === "action")) ? text : null;
+}
+
+function watchOptions() {
+  return [...graph.nodes.filter(n => n.type !== "connection").map(n => n.id),
+          ...Object.entries(graph.owner).map(([q, node]) => `${node}.${q}`),
+          ...graph.nodes.filter(n => n.type === "action").map(n => `${n.id}.gradients`)];
+}
+
+function setWatches(list) {
+  watches = list;
+  localStorage.setItem(watchKey(), JSON.stringify({ watches, expanded }));
+  document.querySelectorAll(".node").forEach(g => g.classList.toggle("watched", watchedNodes().has(g.dataset.id)));
+  renderWatches();
+}
+
+// the value of a cell key "node|quantity|i|j" (quantity "cost" of a goal); a single number unwrapped
+function getValue(key) {
+  const [node, q, ...index] = key.split("|");
+  let v = q === "cost" ? values[node]?.cost : values[node]?.quantities?.[q];
+  index.forEach(i => v = v?.[+i]);
+  return Array.isArray(v) && v.length === 1 && !Array.isArray(v[0]) ? v[0] : v;
+}
+
+function recordTrend() {
+  for (const [node, v] of Object.entries(values)) {
+    (v.quantities ? Object.keys(v.quantities) : ["cost"]).forEach(q => {
+      const key = `${node}|${q}`, x = getValue(key);
+      if (typeof x !== "number") return;
+      const h = trend[key] ||= [];
+      h.push(x);
+      if (h.length > HISTORY) h.shift();
+    });
+  }
+}
+
+function drawSpark(spark) {
+  const h = trend[spark.dataset.spark] || [], W = 64, H = 16;
+  const lo = Math.min(...h), hi = Math.max(...h);
+  const points = h.map((x, i) => `${W - (h.length - 1 - i) * W / (HISTORY - 1)},${hi > lo ? H - 2 - (x - lo) / (hi - lo) * (H - 4) : H / 2}`);
+  spark.innerHTML = h.length > 1 ? `<polyline points="${points.join(" ")}"/>` : "";
+}
+
+const cell = (key, x) => `<span class="v" data-k="${key}">${fmt(x)}</span>`;
+
+// a value: inline in its row (a number with its sparkline, a vector, the size of a matrix, the number of gradients),
+// and expandable below the row (a matrix, the gradients)
+function item(node, q) {
+  const key = `${node}|${q}`, ek = `${node}.${q}`;
+  if (q === "gradients") {
+    const open = isOpen(ek, true);
+    return { inline: `<span class="muted" data-count="${node}">${(values[node]?.gradients || []).length}</span>`,
+             body: open ? `<div data-grads="${node}">${gradientsHtml(node)}</div>` : "", toggle: ek, open };
+  }
+  const v = getValue(key);
+  if (Array.isArray(v) && Array.isArray(v[0])) {
+    const open = isOpen(ek, false);
+    return { inline: `<span class="muted">${v.length}×${v[0].length}</span>`, toggle: ek, open,
+             body: open ? `<div class="nums" style="grid-template-columns: repeat(${v[0].length}, auto)">`
+               + v.flatMap((row, i) => row.map((x, j) => cell(`${key}|${i}|${j}`, x))).join("") + "</div>" : "" };
+  }
+  if (Array.isArray(v)) return { inline: `<span class="vec">${v.map((x, i) => cell(`${key}|${i}`, x)).join("")}</span>` };
+  return { inline: cell(key, v) + `<svg class="spark" data-spark="${key}" width="64" height="16"></svg>` };
+}
+
+function gradientsHtml(node) {
+  const gradients = values[node]?.gradients || [];
+  const flat = g => [g.value].flat(2), norm = g => Math.hypot(...flat(g).map(Number));
+  return [...gradients].sort((a, b) => b.followed - a.followed || norm(b) - norm(a)).map(g =>
+    `<div class="grad${g.followed ? " followed" : ""}"><div class="via">${g.path.join(" → ")} · norm ${fmt(norm(g))}</div>`
+    + `<div class="vec">${flat(g).map(x => `<span>${fmt(x)}</span>`).join("")}</div></div>`).join("")
+    || `<div class="muted">none</div>`;
+}
+
+const caret = it => it.toggle
+  ? `<span class="caret" data-toggle="${it.toggle}" data-open="${it.open ? 1 : 0}">${it.open ? "▾" : "▸"}</span>`
+  : `<span class="caret"></span>`;
+const sub = body => body ? `<div class="sub">${body}</div>` : "";
+const row = (label, it) => `<div class="wrow">${caret(it)}<span class="qname">${label}</span><span class="val">${it.inline}</span></div>`
+  + sub(it.body);
+
+function watchHtml(w) {
+  const [node, q] = splitWatch(w), type = typeOf(node);
+  const remove = `<button class="remove" data-remove="${w}" title="Remove">×</button>`, dot = `<i class="dot ${type}"></i>`;
+  let html;
+  if (q || type === "goal") {  // one value in the head row
+    const it = item(node, q || "cost");
+    const label = q ? `${q} <span class="muted">${node}</span>` : node;
+    const state = type === "goal" ? `<span class="chip" data-state="${node}"></span>` : "";
+    html = `<div class="wrow head">${caret(it)}${dot}<span class="qname" title="${w}">${label}</span>`
+      + `<span class="val">${it.inline}</span>${state}${remove}</div>` + sub(it.body);
+  } else {
+    const open = isOpen(w, true);
+    const quantities = Object.keys(values[node]?.quantities || {});
+    const rows = !open ? "" : !values[node] ? `<div class="wrow muted"><span class="caret"></span>no values yet</div>`
+      : quantities.map(q => row(q, item(node, q))).join("") + (type === "action" ? row("gradients", item(node, "gradients")) : "");
+    html = `<div class="wrow head">${caret({ toggle: w, open })}${dot}<span class="qname">${node}</span>${remove}</div>` + sub(rows);
+  }
+  return `<div class="watch" data-node="${node}">${html}</div>`;
+}
+
+// rebuilt when the watched structure changes, otherwise only the values are updated (so that clicks are not lost);
+// changed values flash
+function renderWatches() {
+  const shape = v => Array.isArray(v) ? [v.length, Array.isArray(v[0]) ? v[0].length : 0] : v === null ? -1 : 0;
+  const now = JSON.stringify([watches, expanded, watches.map(w => {
+    const v = values[splitWatch(w)[0]];
+    return v ? [Object.entries(v.quantities || {}).map(([q, x]) => [q, shape(x)]), shape(v.cost)] : null;
+  })]);
+  const box = document.getElementById("watches");
+  if (now !== signature) {
+    signature = now;
+    box.innerHTML = watches.map(watchHtml).join("");
+    document.getElementById("watch-empty").style.display = watches.length ? "none" : "";
+  } else {
+    box.querySelectorAll("[data-k]").forEach(c => {
+      const text = String(fmt(getValue(c.dataset.k)));
+      if (c.textContent === text) return;
+      c.textContent = text;
+      c.classList.remove("changed");
+      void c.offsetWidth;  // restarts the animation
+      c.classList.add("changed");
+    });
+    box.querySelectorAll("[data-grads]").forEach(g => {
+      const html = gradientsHtml(g.dataset.grads);
+      if (g.dataset.html !== html) { g.dataset.html = html; g.innerHTML = html; }
+    });
+    box.querySelectorAll("[data-count]").forEach(c => c.textContent = (values[c.dataset.count]?.gradients || []).length);
+  }
+  box.querySelectorAll("[data-state]").forEach(c => {
+    const v = values[c.dataset.state];
+    c.textContent = v ? (v.active ? "active" : "fulfilled") : "";
+  });
+  box.querySelectorAll("[data-spark]").forEach(drawSpark);
+}
+
+svg.addEventListener("dblclick", e => {
+  const node = e.target.closest(".node");
+  if (!node || typeOf(node.dataset.id) === "connection") return;
+  const id = node.dataset.id;
+  setWatches(watches.includes(id) ? watches.filter(w => w !== id) : [...watches, id]);
+});
+
+document.getElementById("watch-form").addEventListener("submit", e => {
+  e.preventDefault();
+  const input = document.getElementById("watch-input"), w = resolveWatch(input.value);
+  input.classList.toggle("invalid", !w);
+  if (!w) return;
+  input.value = "";
+  if (!watches.includes(w)) setWatches([...watches, w]);
+});
+document.getElementById("watch-input").addEventListener("input", e => e.target.classList.remove("invalid"));
+
+document.getElementById("watches").addEventListener("click", e => {
+  const { toggle, open, remove } = e.target.dataset;
+  if (toggle) { expanded[toggle] = open !== "1"; setWatches(watches); }
+  if (remove) setWatches(watches.filter(w => w !== remove));
+});
+
+// the node of the watch under the pointer is highlighted in the graph
+document.getElementById("watches").addEventListener("mouseover", e => {
+  const watch = e.target.closest(".watch"), id = watch && watch.dataset.node;
+  document.querySelectorAll(".watch").forEach(w => w.classList.toggle("hl", w === watch));
+  document.querySelectorAll(".node").forEach(g => g.classList.toggle("hl", g.dataset.id === id));
+});
+document.getElementById("watches").addEventListener("mouseleave", () => {
+  document.querySelectorAll(".hl").forEach(x => x.classList.remove("hl"));
+});
+
+// the side panels collapse; their state is kept across reloads
+function collapsible(paneId, toggleId, key) {
+  const pane = document.getElementById(paneId), toggle = document.getElementById(toggleId);
+  const set = collapsed => {
+    pane.classList.toggle("collapsed", collapsed);
+    toggle.classList.toggle("on", !collapsed);
+    localStorage.setItem(key, collapsed ? "collapsed" : "open");
+  };
+  set(localStorage.getItem(key) === "collapsed");
+  toggle.addEventListener("click", () => { set(!pane.classList.contains("collapsed")); if (graph) render(); });
+}
+collapsible("pane", "pane-toggle", "aicon-pane");
+collapsible("watch-pane", "watch-toggle", "aicon-watch-pane");
+
+let graph, view, viewBox, moved = {}, goalLabel = {}, lastPaths = {}, values = {};
+fetch("/graph").then(r => r.json()).then(g => {
+  graph = g;
+  moved = JSON.parse(localStorage.getItem(movedKey()) || "{}");
+  ({ watches = [], expanded = {} } = JSON.parse(localStorage.getItem(watchKey()) || "{}"));
+  watches = watches.filter(resolveWatch);
+  document.getElementById("watch-options").innerHTML = watchOptions().map(o => `<option value="${o}">`).join("");
+  buildComponents(graph);
+  render();
+  renderWatches();
+  const events = new EventSource("/events");
+  const status = document.getElementById("status");
+  events.onopen = () => status.classList.add("live");
+  events.onerror = () => status.classList.remove("live");
+  events.onmessage = m => {
+    const data = JSON.parse(m.data);
+    if (data.paths) { lastPaths = data.paths; showPaths(lastPaths); }
+    if (data.values) { values = data.values; recordTrend(); renderWatches(); }
+  };
+});
+window.addEventListener("resize", () => { if (graph) render(); });
+</script>
+</body>
+</html>
