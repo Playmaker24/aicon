@@ -19,7 +19,7 @@ import torch
 
 from aicon_base.components import SensorComponent
 
-__all__ = ["CubePoseSensor"]
+__all__ = ["CubePoseSensor", "CubeBPoseSensor"]
 
 
 class SimulationSensor(SensorComponent):
@@ -48,4 +48,14 @@ class CubePoseSensor(SimulationSensor):
 
     def obtain_measurements(self) -> bool:
         self.quantities["cube_pos_meas"] = self.measurement(self.env.env.get_cube_a_pos())
+        return True
+
+
+class CubeBPoseSensor(SimulationSensor):
+    """Position of cube B's center, the cube cube A is stacked on."""
+
+    cls_quantity_names_and_shapes: Dict[str, Tuple[int]] = {"cube_b_pos_meas": (3,)}
+
+    def obtain_measurements(self) -> bool:
+        self.quantities["cube_b_pos_meas"] = self.measurement(self.env.env.get_cube_b_pos())
         return True

@@ -18,7 +18,14 @@ from aicon_base.components import EstimationComponent
 from aicon_base.inference.ekf import predict_ekf, predict_ekf_other_quantity, update_ekf
 from aicon_base.inference.util import gradient_preserving_clipping
 
-__all__ = ["CubePositionEstimator", "EECubeDistEstimator", "EEPoseEstimator", "GraspedEstimator"]
+__all__ = [
+    "CubeBPositionEstimator",
+    "CubePositionEstimator",
+    "EECubeDistEstimator",
+    "EEPoseEstimator",
+    "GraspedEstimator",
+    "StackedEstimator",
+]
 
 
 class EEPoseEstimator(EstimationComponent):
@@ -167,3 +174,76 @@ class GraspedEstimator(EstimationComponent):
             return (new_likelihood,), (new_likelihood,)
 
         return f_func, ["likelihood_grasped_cube"], ["likelihood_grasped_cube"]
+
+
+class CubeBPositionEstimator(EstimationComponent):
+    """Position of cube B's center, from the direct measurement. Cube B is not held by the robot, so there is no
+    grasp term: it only moves if something pushes it."""
+
+    cls_quantity_names_and_shapes: Dict[str, Tuple[int]] = {"position_cube_b": (3,), "uncertainty_cube_b": (3, 3)}
+
+    def initialize_quantities(self):
+        c_meas = self.connections["CubeBDirectMeasurement"]
+        with c_meas.lock:
+            if not c_meas.connected_quantities_initialized["cube_b_pos_meas"]:
+                return False
+            cube_b_pos_meas = c_meas.connected_quantities["cube_b_pos_meas"]
+        self.quantities["position_cube_b"] = cube_b_pos_meas
+        self.quantities["uncertainty_cube_b"] = torch.eye(3, dtype=self.dtype, device=self.device) * 0.0001
+        return True
+
+    def define_estimation_function_f(self):
+        c_direct_meas = self.connections["CubeBDirectMeasurement"].c_func
+
+        def forward_cube(mu):
+            return mu  # cubes do not move by themselves
+
+        def f_func(position_cube_b, uncertainty_cube_b, cube_b_pos_meas, dt):
+            eye = torch.eye(3, dtype=self.dtype, device=self.device)
+            mu_new, Sigma_new = predict_ekf(forward_cube, position_cube_b, uncertainty_cube_b, eye * 0.001 * dt)
+            mu_new, Sigma_new = update_ekf(
+                c_direct_meas,
+                mu_new,
+                Sigma_new,
+                cube_b_pos_meas,
+                eye * 0.0001,
+                eye * 0.0001,
+                prevent_uncertainty_state_grad=False,
+            )
+            return (mu_new, Sigma_new), (mu_new, Sigma_new)
+
+        return f_func, ["position_cube_b", "uncertainty_cube_b"], ["position_cube_b", "uncertainty_cube_b"]
+
+
+class StackedEstimator(EstimationComponent):
+    """Likelihood that cube A rests on cube B and has been let go (see StackCubeConnection)."""
+
+    cls_quantity_names_and_shapes: Dict[str, Tuple[int]] = {"likelihood_stacked_cube": (1,)}
+
+    def initialize_quantities(self):
+        self.quantities["likelihood_stacked_cube"] = torch.ones(1, dtype=self.dtype, device=self.device) * 0.01
+        return True
+
+    def define_estimation_function_f(self):
+        c_func = self.connections["StackLikelihood"].c_func
+
+        def f_func(
+            likelihood_stacked_cube,
+            position_cube,
+            position_cube_b,
+            likelihood_grasped_cube,
+            gripper_activation,
+            gripper_aperture_meas,
+        ):
+            innovation = c_func(
+                likelihood_stacked_cube,
+                position_cube,
+                position_cube_b,
+                likelihood_grasped_cube,
+                gripper_activation,
+                gripper_aperture_meas,
+            )
+            new_likelihood = gradient_preserving_clipping(likelihood_stacked_cube + innovation, 1e-10, 0.9999999)
+            return (new_likelihood,), (new_likelihood,)
+
+        return f_func, ["likelihood_stacked_cube"], ["likelihood_stacked_cube"]

@@ -19,10 +19,17 @@ import torch
 
 from .actions import GripperProprioAct, RobotProprioAct
 from .connections import build_connections
-from .estimators import CubePositionEstimator, EECubeDistEstimator, EEPoseEstimator, GraspedEstimator
+from .estimators import (
+    CubeBPositionEstimator,
+    CubePositionEstimator,
+    EECubeDistEstimator,
+    EEPoseEstimator,
+    GraspedEstimator,
+    StackedEstimator,
+)
 #from .goals import CubeLiftedGoal
-from .goals import CubeStackedGoal
-from .sensors import CubePoseSensor
+from .goals import StackLikelihoodGoal
+from .sensors import CubeBPoseSensor, CubePoseSensor
 
 # # height of the table top in robosuite's Lift task [m]
 # TABLE_HEIGHT = 0.8
@@ -48,13 +55,21 @@ def get_building_functions(env):
     # the sequential middleware updates the components in this order
     component_builders = {
         "GripperProprioAct": lambda mockbuild: GripperProprioAct(
-            "GripperProprioAct", connections("GraspedLikelihood"), env, device=cpu, dtype=double, mockbuild=mockbuild
+            "GripperProprioAct",
+            connections("GraspedLikelihood", "StackLikelihood"),
+            env,
+            device=cpu,
+            dtype=double,
+            mockbuild=mockbuild,
         ),
         "RobotProprioAct": lambda mockbuild: RobotProprioAct(
             "RobotProprioAct", connections("RobotKinematics"), env, device=cpu, dtype=double, mockbuild=mockbuild
         ),
         "CubePosSensor": lambda mockbuild: CubePoseSensor(
             "CubePosSensor", connections("CubeDirectMeasurement"), env, device=cpu, dtype=double, mockbuild=mockbuild
+        ),
+        "CubeBPosSensor": lambda mockbuild: CubeBPoseSensor(
+            "CubeBPosSensor", connections("CubeBDirectMeasurement"), env, device=cpu, dtype=double, mockbuild=mockbuild
         ),
         "EEPoseEstimator": lambda mockbuild: EEPoseEstimator(
             "EEPoseEstimator",
@@ -72,23 +87,33 @@ def get_building_functions(env):
         ),
         "GraspLikelihoodEstimator": lambda mockbuild: GraspedEstimator(
             "GraspLikelihoodEstimator",
-            connections("GraspedCubeKinematics", "GraspedLikelihood"),
+            connections("GraspedCubeKinematics", "GraspedLikelihood", "StackLikelihood"),
             device=cpu,
             dtype=double,
             mockbuild=mockbuild,
         ),
         "CubePosEstimator": lambda mockbuild: CubePositionEstimator(
             "CubePosEstimator",
-            connections("CubeDirectMeasurement", "GraspedCubeKinematics", "EECubeDistance"),
+            connections("CubeDirectMeasurement", "GraspedCubeKinematics", "EECubeDistance", "StackLikelihood"),
+            device=cpu,
+            dtype=double,
+            mockbuild=mockbuild,
+        ),
+        "CubeBPosEstimator": lambda mockbuild: CubeBPositionEstimator(
+            "CubeBPosEstimator",
+            connections("CubeBDirectMeasurement", "StackLikelihood"),
+            device=cpu,
+            dtype=double,
+            mockbuild=mockbuild,
+        ),
+        "StackLikelihoodEstimator": lambda mockbuild: StackedEstimator(
+            "StackLikelihoodEstimator",
+            connections("StackLikelihood"),
             goals={
-                "StackCube": lambda d, t, mockbuild=False: CubeStackedGoal(
-                    is_active=True,
-                    target_position=lambda: env.get_cube_b_pos() + [0.0, 0.0, STACK_HEIGHT_OFFSET],
-                    dtype=t,
-                    device=d,
-                    mockbuild=mockbuild,
+                "StackCube": lambda d, t, mockbuild=False: StackLikelihoodGoal(
+                    is_active=True, dtype=t, device=d, mockbuild=mockbuild
                 )
-            }, 
+            },
             device=cpu,
             dtype=double,
             mockbuild=mockbuild,

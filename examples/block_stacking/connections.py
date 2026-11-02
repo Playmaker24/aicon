@@ -31,6 +31,21 @@ BETWEEN_FINGERS_SCALE = 0.005
 HOLDING_DISTANCE = 0.03
 # Fraction of the gap between the grasp evidence and the likelihood closed per tick.
 GRASP_EVIDENCE_RATE = 0.3
+# Stacking: cube A's center is this far above cube B's center when A rests on B (half sizes 0.02 + 0.025) [m], and A
+# is carried this much higher than that while it is not yet above B.
+STACK_HEIGHT = 0.045
+STACK_CLEARANCE = 0.06
+# Length scales [m] of the stack model: the wide ones draw A to the place above B, the narrow one tells when A is above
+# B so that it may come down, and the last one how exactly A has to rest on B for the release.
+STACK_REACH_HORIZONTAL_SCALE = 0.15
+STACK_REACH_VERTICAL_SCALE = 0.15
+STACK_ALIGN_SCALE = 0.01
+STACK_PLACE_HEIGHT_SCALE = 0.01
+# A counts as placed (evidence) within these distances [m] of the stack position
+PLACED_HORIZONTAL_TOLERANCE = 0.02
+PLACED_VERTICAL_TOLERANCE = 0.012
+# Fraction of the gap between the placement evidence and the likelihood closed per tick.
+STACK_EVIDENCE_RATE = 0.3
 
 
 def build_connections():
@@ -49,6 +64,12 @@ def build_connections():
         ),
         "CubeDirectMeasurement": lambda device, dtype, mockbuild: CubeDirectMeasurementConnection(
             "CubeDirectMeasurement", device=device, dtype=dtype, mockbuild=mockbuild
+        ),
+        "StackLikelihood": lambda device, dtype, mockbuild: StackCubeConnection(
+            "StackLikelihood", device=device, dtype=dtype, mockbuild=mockbuild
+        ),
+        "CubeBDirectMeasurement": lambda device, dtype, mockbuild: CubeBDirectMeasurementConnection(
+            "CubeBDirectMeasurement", device=device, dtype=dtype, mockbuild=mockbuild
         ),
     }
 
@@ -242,5 +263,113 @@ class CubeDirectMeasurementConnection(ActiveInterconnection):
     def define_implicit_connection_function(self):
         def connection_func(position_cube, cube_pos_meas):
             return cube_pos_meas - position_cube
+
+        return connection_func
+
+
+class CubeBDirectMeasurementConnection(ActiveInterconnection):
+    """The measured position of cube B equals the estimated one."""
+
+    def __init__(
+        self,
+        name: str,
+        dtype: Union[torch.dtype, None] = None,
+        device: Union[torch.device, None] = None,
+        mockbuild: bool = False,
+    ):
+        super().__init__(
+            name,
+            {"position_cube_b": (3,), "uncertainty_cube_b": (3, 3), "cube_b_pos_meas": (3,)},
+            dtype=dtype,
+            device=device,
+            mockbuild=mockbuild,
+        )
+
+    def define_implicit_connection_function(self):
+        def connection_func(position_cube_b, cube_b_pos_meas):
+            return cube_b_pos_meas - position_cube_b
+
+        return connection_func
+
+
+class StackCubeConnection(ActiveInterconnection):
+    """How the stack likelihood (cube A rests on cube B and is let go) depends on the positions of the cubes and on the
+    gripper. It is built like `GraspCubeConnection`: the value is evidence, the gradient is a model of what the
+    actions would change.
+
+    The value moves towards the evidence that A was placed: A is above B within PLACED_*_TOLERANCE, the gripper was
+    told to open and its fingers are fully open.
+
+    The gradient:
+    - A is drawn to the place above B, but at a height of STACK_HEIGHT + STACK_CLEARANCE above B's center, i.e. clear of
+      B's top. Only when A is above B (the narrow `aligned` term) the height it is drawn to drops to STACK_HEIGHT, so
+      it comes down onto B and does not hit it from the side. The height `target` is not differentiated: `aligned`
+      switches it, it is not something the actions would change.
+    - While A is held, opening the gripper helps if A is placed (above B and at the stack height) and harms
+      otherwise, so the gripper stays closed while A is carried and opens once A is in place. While A is not held,
+      the stack has no opinion on the gripper.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        dtype: Union[torch.dtype, None] = None,
+        device: Union[torch.device, None] = None,
+        mockbuild: bool = False,
+    ):
+        super().__init__(
+            name,
+            {
+                "likelihood_stacked_cube": (1,),
+                "position_cube": (3,),
+                "position_cube_b": (3,),
+                "likelihood_grasped_cube": (1,),
+                "gripper_activation": (1,),
+                "gripper_aperture_meas": (1,),
+            },
+            dtype=dtype,
+            device=device,
+            mockbuild=mockbuild,
+        )
+
+    def define_implicit_connection_function(self):
+        def connection_func(
+            likelihood_stacked_cube,
+            position_cube,
+            position_cube_b,
+            likelihood_grasped_cube,
+            gripper_activation,
+            gripper_aperture_meas,
+        ):
+            difference = position_cube - position_cube_b
+            horizontal_sq = torch.sum(torch.square(difference[:2])).reshape(1)
+            height = difference[2:3]
+
+            # smooth terms, these carry the gradient
+            aligned = torch.exp(-horizontal_sq / (2 * STACK_ALIGN_SCALE**2))
+            # A is carried high until it is above B, then it comes down; no gradient through this switch
+            target_height = STACK_HEIGHT + STACK_CLEARANCE * (1 - aligned.detach())
+            approach = torch.exp(
+                -horizontal_sq / (2 * STACK_REACH_HORIZONTAL_SCALE**2)
+                - torch.square(height - target_height) / (2 * STACK_REACH_VERTICAL_SCALE**2)
+            )
+            at_place = aligned * torch.exp(-torch.square(height - STACK_HEIGHT) / (2 * STACK_PLACE_HEIGHT_SCALE**2))
+
+            # 0/1 conditions without gradient: the evidence that A was placed and let go
+            dtype = likelihood_stacked_cube.dtype
+            above_b = (horizontal_sq < PLACED_HORIZONTAL_TOLERANCE**2).to(dtype)
+            at_stack_height = (torch.abs(height - STACK_HEIGHT) < PLACED_VERTICAL_TOLERANCE).to(dtype)
+            told_to_open = (gripper_activation < 0.5).to(dtype)
+            fingers_open = (gripper_aperture_meas > OPEN_APERTURE).to(dtype)
+            placed = above_b * at_stack_height * told_to_open * fingers_open
+            innovation_from_evidence = STACK_EVIDENCE_RATE * (placed - likelihood_stacked_cube)
+
+            # gradient: drawing A to the place above B, and opening the gripper once it is there. The gripper only
+            # matters for the stack while A is held (the grasp likelihood, not differentiated here): before that,
+            # whether to close it is up to the grasp.
+            held = likelihood_grasped_cube.detach()
+            effect_of_actions = approach + held * (1 - gripper_activation) * (at_place - 0.5)
+            # effect_of_actions adds its gradient but not its value
+            return innovation_from_evidence + effect_of_actions - effect_of_actions.detach()
 
         return connection_func
